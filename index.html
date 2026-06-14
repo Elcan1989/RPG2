@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <title>殭屍生存：極速升級 (優化+衝刺版)</title>
+    <title>殭屍生存：極速升級 (調整版)</title>
     <style>
         body { text-align: center; background-color: #111; color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 20px; }
         #game-wrapper { position: relative; width: 800px; height: 600px; margin: 10px auto; overflow: hidden; border: 2px solid #555; box-shadow: 0 0 20px rgba(0,0,0,0.8); }
@@ -57,7 +57,7 @@
         <div id="main-menu" class="modal" style="display: flex;">
             <h1 class="game-title">無盡屍海</h1>
             <p class="game-desc">
-                移動: <strong>W A S D</strong> | 衝刺: <strong>Shift</strong> | 大招: <strong>Space</strong><br>
+                移動: <strong>W A S D</strong> | 衝刺: <strong>Shift</strong> | 大招: <strong>Space</strong> | 暫停: <strong>ESC</strong><br>
                 升級所需經驗已大幅降低！快速收集寶石，組建你的終極防禦網吧！
             </p>
             <div>
@@ -79,9 +79,17 @@
         </div>
 
         <div id="end-modal" class="modal">
-            <h1 id="end-title" style="font-size: 48px;"></h1>
-            <p id="end-stats" style="font-size: 20px; color: white; margin-bottom: 20px;"></p>
+            <h1 id="end-title" style="font-size: 48px; margin-bottom: 5px;"></h1>
+            <p id="end-stats" style="font-size: 20px; color: white; margin-bottom: 10px; margin-top: 0;"></p>
+            <div id="end-damage-chart" style="margin-bottom: 20px;"></div>
             <button class="action-btn" onclick="location.reload()">返回主選單</button>
+        </div>
+
+        <div id="pause-modal" class="modal">
+            <h1 style="color: #ffcc00; text-shadow: 0 0 10px #ffcc00; margin-bottom: 5px;">⏸️ 遊戲暫停</h1>
+            <h2 style="color: white; margin-top: 0; font-size: 20px;">目前擁有技能</h2>
+            <div id="pause-skills-list" style="width: 500px; max-height: 350px; overflow-y: auto; display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; background: rgba(34,34,34,0.9); padding: 15px; border: 2px solid #555; border-radius: 10px;"></div>
+            <button class="action-btn" id="resume-btn" style="margin-top: 20px;">繼續遊戲 (ESC)</button>
         </div>
     </div>
 
@@ -95,20 +103,13 @@
         const dashBar = document.getElementById("dash-bar");
         const dashText = document.getElementById("dash-text");
         
-        const modals = {
-            main: document.getElementById("main-menu"), 
-            shop: document.getElementById("shop-modal"),
-            level: document.getElementById("level-up-modal"), 
-            end: document.getElementById("end-modal")
-        };
+        const modals = { main: document.getElementById("main-menu"), shop: document.getElementById("shop-modal"), level: document.getElementById("level-up-modal"), end: document.getElementById("end-modal"), pause: document.getElementById("pause-modal") };
         const skillChoicesDiv = document.getElementById("skill-choices");
 
-        // --- 優化：全域變數設定 ---
         let lastTime = 0;
-        const CELL_SIZE = 100; // 空間雜湊網格大小
-        let trails = []; // 儲存衝刺殘影
+        const CELL_SIZE = 100;
+        let trails = []; 
 
-        // --- 儲存與商店系統 ---
         let savedGold = parseInt(localStorage.getItem('zombie_gold')) || 0;
         let shopUpgrades = JSON.parse(localStorage.getItem('zombie_upgrades')) || { hp: 0, damage: 0, speed: 0 };
         
@@ -136,26 +137,26 @@
             }
         }
         function buyUpgrade(key, cost) {
-            if (savedGold >= cost && shopUpgrades[key] < SHOP_CONFIG[key].maxLvl) {
-                savedGold -= cost; shopUpgrades[key]++;
-                localStorage.setItem('zombie_gold', savedGold); localStorage.setItem('zombie_upgrades', JSON.stringify(shopUpgrades)); renderShop();
-            }
+            if (savedGold >= cost && shopUpgrades[key] < SHOP_CONFIG[key].maxLvl) { savedGold -= cost; shopUpgrades[key]++; localStorage.setItem('zombie_gold', savedGold); localStorage.setItem('zombie_upgrades', JSON.stringify(shopUpgrades)); renderShop(); }
         }
         document.getElementById("open-shop-btn").addEventListener("click", openShop);
         document.getElementById("close-shop-btn").addEventListener("click", () => { modals.shop.style.display = "none"; modals.main.style.display = "flex"; });
 
-        // --- 遊戲核心變數 ---
-        let gameState = "MENU"; 
-        const WORLD = { width: 2400, height: 1800 };
-        let camera = { x: 0, y: 0 };
-
+        let gameState = "MENU"; const WORLD = { width: 2400, height: 1800 }; let camera = { x: 0, y: 0 };
         let player, bullets, zombies, drops, floatingTexts, obstacles, explosions;
         let score, level, currentXp, xpNeeded, gameSeconds, dangerLevel, sessionGold;
-        let bossActive, bossDefeated;
-        let ultEnergy = 0; const MAX_ULT_ENERGY = 100;
+        let bossActive, bossDefeated; let ultEnergy = 0; const MAX_ULT_ENERGY = 100;
         let shootCooldown = 0; let SHOOT_INTERVAL = 15; let targetZombie = null;
 
-        // --- 技能與進化系統 ---
+        // --- 新增實體陣列與冷卻時間 ---
+        let thrownWeapons = []; // 飛行中的燃燒瓶
+        let firePools = [];     // 地面火圈
+        let lightningEffects = []; // 閃電視覺特效
+        let molotovCooldown = 0;
+        let lightningCooldown = 0;
+
+        let damageStats = { shoot: 0, explosion: 0, orbital: 0, aura: 0, ult: 0, molotov: 0, lightning: 0 };
+
         const SKILL_POOL = [
             { id: "speed", name: "👟 跑鞋", desc: "移動速度增加", level: 0, maxLevel: 5, apply: () => player.speed += 0.5 },
             { id: "fireRate", name: "🔫 快槍手", desc: "射擊間隔縮短", level: 0, maxLevel: 5, apply: () => SHOOT_INTERVAL = Math.max(3, SHOOT_INTERVAL - 2.5) },
@@ -164,18 +165,38 @@
             { id: "damage", name: "⚔️ 威力提升", desc: "子彈傷害增加", level: 0, maxLevel: 5, apply: () => player.damage += 1 },
             { id: "magnet", name: "🧲 磁鐵", desc: "寶石吸收範圍擴大", level: 0, maxLevel: 4, apply: () => player.pickupRadius += 80 },
             { id: "orbitals", name: "💫 護體法球", desc: "召喚高傷害環繞法球", level: 0, maxLevel: 4, apply: () => player.orbitals += 1 },
-            { id: "shield", name: "🛡️ 能量護盾", desc: "獲得可自動回復的護盾", level: 0, maxLevel: 5, apply: () => { player.maxShield += 25; player.shieldRegen += 0.05; } }
+            { id: "shield", name: "🛡️ 能量護盾", desc: "獲得可自動回復的護盾", level: 0, maxLevel: 5, apply: () => { player.maxShield += 25; player.shieldRegen += 0.05; } },
+            // 新增技能 (無進化)
+            { id: "molotov", name: "🔥 燃燒瓶", desc: "投擲燃燒瓶產生持續傷害火圈", level: 0, maxLevel: 5, apply: () => player.molotovLevel += 1 },
+            { id: "lightning", name: "⚡ 閃電鏈", desc: "釋放在敵人之間彈跳的閃電", level: 0, maxLevel: 5, apply: () => player.lightningLevel += 1 }
         ];
 
         const EVOLUTIONS = [
-            {
-                id: "evo_explosive", reqWeapon: "multiShot", reqPassive: "damage",
-                name: "✨ [超級進化] 爆裂彈", desc: "散彈槍終極進化！命中時產生大範圍毀滅爆炸！",
-                applied: false, apply: () => { player.isEvolvedShot = true; }
-            }
+            { id: "evo_explosive", reqWeapon: "multiShot", reqPassive: "damage", name: "✨ [超級進化] 爆裂彈", desc: "散彈槍終極進化！命中時產生大範圍毀滅爆炸！", applied: false, apply: () => { player.isEvolvedShot = true; } }
         ];
 
         const FALLBACK_SKILL = { id: "heal", name: "💖 急救包", desc: "立刻恢復 50 點血量", level: 0, maxLevel: null, apply: () => player.hp = Math.min(player.maxHp, player.hp + 50) };
+
+        function togglePause() {
+            if (gameState === "PLAYING") { gameState = "PAUSED"; renderPauseMenu(); modals.pause.style.display = "flex"; } 
+            else if (gameState === "PAUSED") { gameState = "PLAYING"; modals.pause.style.display = "none"; }
+        }
+
+        function renderPauseMenu() {
+            const listDiv = document.getElementById("pause-skills-list"); listDiv.innerHTML = "";
+            let acquiredSkills = SKILL_POOL.filter(s => s.level > 0); let acquiredEvos = EVOLUTIONS.filter(e => e.applied);
+            if (acquiredSkills.length === 0 && acquiredEvos.length === 0) { listDiv.innerHTML = "<p style='color: #aaa; width: 100%; text-align: center; font-size: 18px;'>目前尚未獲得任何技能</p>"; return; }
+            acquiredEvos.forEach(evo => {
+                let item = document.createElement("div"); item.style.cssText = "background: #332b00; border: 2px solid #ffd700; padding: 10px; border-radius: 8px; width: 45%; box-sizing: border-box; text-align: center; box-shadow: 0 0 10px rgba(255, 215, 0, 0.3);";
+                item.innerHTML = `<strong style="color:#ffd700; font-size: 16px;">${evo.name}</strong><br><span style="font-size:14px; color:#ddd;">MAX</span>`; listDiv.appendChild(item);
+            });
+            acquiredSkills.forEach(skill => {
+                let item = document.createElement("div"); let isMax = skill.level >= skill.maxLevel;
+                item.style.cssText = `background: #222; border: 2px solid ${isMax ? '#00ffcc' : '#555'}; padding: 10px; border-radius: 8px; width: 45%; box-sizing: border-box; text-align: center;`;
+                item.innerHTML = `<strong style="color:#00ffff; font-size: 16px;">${skill.name}</strong><br><span style="font-size:14px; color:${isMax ? '#00ffcc' : '#aaa'};">Lv. ${skill.level} ${isMax ? '(MAX)' : ` / ${skill.maxLevel}`}</span>`; listDiv.appendChild(item);
+            });
+        }
+        document.getElementById("resume-btn").addEventListener("click", togglePause);
 
         function initGame() {
             player = { 
@@ -184,36 +205,30 @@
                 maxHp: 100 + SHOP_CONFIG.hp.effect(shopUpgrades.hp),
                 speed: 4 + SHOP_CONFIG.speed.effect(shopUpgrades.speed),
                 damage: 1 + SHOP_CONFIG.damage.effect(shopUpgrades.damage),
-                maxShield: 0, shield: 0, shieldRegen: 0, isEvolvedShot: false,
-                
-                // Dash 屬性
-                isDashing: false,
-                isInvincible: false,
-                dashCooldown: 0,
-                dashCooldownMax: 3.0,
-                dashTimer: 0,
-                dashDuration: 0.2,
-                dashSpeedMult: 3.5
+                maxShield: 0, shield: 0, shieldRegen: 0,
+                isEvolvedShot: false,
+                molotovLevel: 0, lightningLevel: 0,
+                // Dash
+                isDashing: false, isInvincible: false, dashCooldown: 0, dashCooldownMax: 3.0, dashTimer: 0, dashDuration: 0.2, dashSpeedMult: 3.5
             };
             player.hp = player.maxHp;
             
-            bullets = []; zombies = []; drops = []; floatingTexts = []; obstacles = []; explosions = [];
-            trails = [];
-            score = 0; level = 1; currentXp = 0; sessionGold = 0;
-            xpNeeded = 10; 
+            bullets = []; zombies = []; drops = []; floatingTexts = []; obstacles = []; explosions = []; trails = [];
+            thrownWeapons = []; firePools = []; lightningEffects = [];
+            molotovCooldown = 0; lightningCooldown = 0;
+            
+            score = 0; level = 1; currentXp = 0; sessionGold = 0; xpNeeded = 10; 
             gameSeconds = 0; dangerLevel = 0; bossActive = false; bossDefeated = false;
             ultEnergy = 0; updateUltUI();
+            damageStats = { shoot: 0, explosion: 0, orbital: 0, aura: 0, ult: 0, molotov: 0, lightning: 0 };
             
-            dashBar.style.width = `100%`;
-            dashBar.style.background = "#00ffcc";
-            dashText.innerText = "衝刺就緒 [Shift]";
+            dashBar.style.width = `100%`; dashBar.style.background = "#00ffcc"; dashText.innerText = "衝刺就緒 [Shift]";
 
             for(let i=0; i<40; i++) {
                 let ox = Math.random() * (WORLD.width - 100) + 50; let oy = Math.random() * (WORLD.height - 100) + 50;
                 if (Math.hypot(ox - 1200, oy - 900) > 250) obstacles.push({ x: ox, y: oy, radius: Math.random() * 25 + 30, color: "#555" });
             }
-            SKILL_POOL.forEach(s => s.level = 0);
-            EVOLUTIONS.forEach(evo => evo.applied = false);
+            SKILL_POOL.forEach(s => s.level = 0); EVOLUTIONS.forEach(evo => evo.applied = false);
         }
 
         document.getElementById("start-btn").addEventListener("click", () => { initGame(); modals.main.style.display = "none"; gameState = "PLAYING"; updateUI(); });
@@ -221,7 +236,15 @@
         setInterval(() => {
             if (gameState === "PLAYING") {
                 gameSeconds++; dangerLevel = Math.floor(gameSeconds / 15); updateUI();
-                if (gameSeconds % 20 === 0 && !bossActive) drops.push({ x: Math.random() * WORLD.width, y: Math.random() * WORLD.height, radius: 12, type: "medkit" });
+                if (gameSeconds % 20 === 0 && !bossActive) {
+                    let spawnX, spawnY; let isValid = false; let attempts = 0; const medkitRadius = 12;
+                    while (!isValid && attempts < 50) {
+                        spawnX = Math.random() * WORLD.width; spawnY = Math.random() * WORLD.height; isValid = true;
+                        for (let obs of obstacles) { if (Math.hypot(spawnX - obs.x, spawnY - obs.y) < medkitRadius + obs.radius) { isValid = false; break; } }
+                        attempts++;
+                    }
+                    if (isValid) drops.push({ x: spawnX, y: spawnY, radius: medkitRadius, type: "medkit" });
+                }
             }
         }, 1000);
 
@@ -230,27 +253,18 @@
         let keys = {};
         window.addEventListener("keydown", (e) => {
             keys[e.code] = true;
+            if (e.code === "Escape") togglePause();
             if (e.code === "Space" && ultEnergy >= MAX_ULT_ENERGY && gameState === "PLAYING") {
                 ultEnergy = 0; updateUltUI();
                 const bulletCount = 24 + (level * 2); 
                 for (let i = 0; i < bulletCount; i++) {
                     const angle = (i / bulletCount) * Math.PI * 2;
-                    bullets.push({
-                        x: player.x, y: player.y, radius: 8, color: "#ff00ff", dx: Math.cos(angle) * 12, dy: Math.sin(angle) * 12, 
-                        damage: player.damage * 4, pierce: Infinity, hitZombies: new Set(), isUlt: true
-                    });
+                    bullets.push({ x: player.x, y: player.y, radius: 8, color: "#ff00ff", dx: Math.cos(angle) * 12, dy: Math.sin(angle) * 12, damage: player.damage * 4, pierce: Infinity, hitZombies: new Set(), isUlt: true });
                 }
                 canvas.style.borderColor = "#ff00ff"; setTimeout(() => canvas.style.borderColor = "#555", 200);
             }
-            
-            // 衝刺按鍵判定
             if ((e.code === "ShiftLeft" || e.code === "ShiftRight") && gameState === "PLAYING") {
-                if (player.dashCooldown <= 0 && !player.isDashing) {
-                    player.isDashing = true;
-                    player.isInvincible = true;
-                    player.dashTimer = player.dashDuration;
-                    player.dashCooldown = player.dashCooldownMax;
-                }
+                if (player.dashCooldown <= 0 && !player.isDashing) { player.isDashing = true; player.isInvincible = true; player.dashTimer = player.dashDuration; player.dashCooldown = player.dashCooldownMax; }
             }
         });
         window.addEventListener("keyup", (e) => keys[e.code] = false);
@@ -263,43 +277,27 @@
 
         function gainXp(amount) {
             currentXp += amount;
-            if (currentXp >= xpNeeded && gameState === "PLAYING") processLevelUp();
-            else { xpBar.style.width = `${(currentXp / xpNeeded) * 100}%`; updateUI(); }
+            if (currentXp >= xpNeeded && gameState === "PLAYING") processLevelUp(); else { xpBar.style.width = `${(currentXp / xpNeeded) * 100}%`; updateUI(); }
         }
 
         function processLevelUp() {
-            currentXp -= xpNeeded; level++; 
-            xpNeeded = Math.floor(xpNeeded * 1.2); 
-            
+            currentXp -= xpNeeded; level++; xpNeeded = Math.floor(xpNeeded * 1.2); 
             gameState = "LEVEL_UP"; modals.level.style.display = "flex"; skillChoicesDiv.innerHTML = "";
-            
             let availableSkills = SKILL_POOL.filter(s => s.level < s.maxLevel);
-            
             EVOLUTIONS.forEach(evo => {
                 if (!evo.applied) {
-                    let wpn = SKILL_POOL.find(s => s.id === evo.reqWeapon);
-                    let pass = SKILL_POOL.find(s => s.id === evo.reqPassive);
-                    if (wpn && wpn.level >= wpn.maxLevel && pass && pass.level > 0) {
-                        availableSkills.push({
-                            name: evo.name, desc: evo.desc, level: 0, maxLevel: 1, isEvo: true,
-                            apply: () => { evo.applied = true; evo.apply(); }
-                        });
-                    }
+                    let wpn = SKILL_POOL.find(s => s.id === evo.reqWeapon); let pass = SKILL_POOL.find(s => s.id === evo.reqPassive);
+                    if (wpn && wpn.level >= wpn.maxLevel && pass && pass.level > 0) { availableSkills.push({ name: evo.name, desc: evo.desc, level: 0, maxLevel: 1, isEvo: true, apply: () => { evo.applied = true; evo.apply(); } }); }
                 }
             });
-
             let choices = availableSkills.length > 0 ? availableSkills.sort(() => 0.5 - Math.random()).slice(0, 3) : [FALLBACK_SKILL];
-            
             choices.forEach(skill => {
-                let btn = document.createElement("button"); 
-                btn.className = skill.isEvo ? "skill-btn evo-btn" : "skill-btn";
+                let btn = document.createElement("button"); btn.className = skill.isEvo ? "skill-btn evo-btn" : "skill-btn";
                 let levelText = skill.maxLevel && !skill.isEvo ? ` (Lv.${skill.level + 1}/${skill.maxLevel})` : "";
                 btn.innerHTML = `<strong>${skill.name}${levelText}</strong><br><span style="font-size:14px; color:${skill.isEvo ? '#fff' : '#aaa'};">${skill.desc}</span>`;
                 btn.onclick = () => { 
-                    if(skill.maxLevel !== null) skill.level++; 
-                    skill.apply(); 
-                    if (currentXp >= xpNeeded) processLevelUp();
-                    else { gameState = "PLAYING"; modals.level.style.display = "none"; xpBar.style.width = `${(currentXp / xpNeeded) * 100}%`; updateUI(); }
+                    if(skill.maxLevel !== null) skill.level++; skill.apply(); 
+                    if (currentXp >= xpNeeded) processLevelUp(); else { gameState = "PLAYING"; modals.level.style.display = "none"; xpBar.style.width = `${(currentXp / xpNeeded) * 100}%`; updateUI(); }
                 };
                 skillChoicesDiv.appendChild(btn);
             });
@@ -313,11 +311,28 @@
         }
 
         function endGame(isWin) {
-            gameState = "GAME_OVER";
-            savedGold += sessionGold; localStorage.setItem('zombie_gold', savedGold); 
-            document.getElementById("end-title").innerText = isWin ? "🏆 勝利！" : "💀 遊戲結束";
-            document.getElementById("end-title").style.color = isWin ? "#ffd700" : "#ff0000";
-            document.getElementById("end-stats").innerHTML = `存活：${formatTime(gameSeconds)} | 最終等級：${level} | 擊殺數：${score}<br>獲得金幣：💰 ${sessionGold}`;
+            gameState = "GAME_OVER"; savedGold += sessionGold; localStorage.setItem('zombie_gold', savedGold); 
+            document.getElementById("end-title").innerText = isWin ? "🏆 勝利！" : "💀 遊戲結束"; document.getElementById("end-title").style.color = isWin ? "#ffd700" : "#ff0000";
+            document.getElementById("end-stats").innerHTML = `存活：${formatTime(gameSeconds)} | 最終等級：${level} | 擊殺：${score} | 金幣：💰 ${sessionGold}`;
+            
+            let totalDamage = Object.values(damageStats).reduce((a, b) => a + b, 0);
+            let chartHTML = `<div style="width: 450px; text-align: left; background: #222; padding: 15px; border-radius: 8px; border: 1px solid #555;">`;
+            chartHTML += `<h3 style="margin: 0 0 10px 0; color: #fff; font-size: 18px; text-align: center;">戰鬥傷害分析</h3>`;
+            
+            if (totalDamage === 0) { chartHTML += `<p style="text-align: center; color: #aaa;">沒有造成任何傷害</p>`; } 
+            else {
+                let maxDmg = Math.max(...Object.values(damageStats));
+                const statNames = { shoot: "🔫 一般射擊/散彈", explosion: "💥 爆裂彈", orbital: "💫 護體法球", aura: "🔥 傷害光環", ult: "🌠 全畫面大招", molotov: "🔥 燃燒瓶", lightning: "⚡ 閃電鏈" };
+                const statColors = { shoot: "#ffff00", explosion: "#ff5500", orbital: "#00ffff", aura: "#ff8800", ult: "#ff00ff", molotov: "#ff3300", lightning: "#00aaff" };
+                let sortedStats = Object.keys(damageStats).sort((a, b) => damageStats[b] - damageStats[a]);
+                sortedStats.forEach(key => {
+                    if (damageStats[key] > 0) {
+                        let pct = (damageStats[key] / maxDmg) * 100;
+                        chartHTML += `<div style="margin-bottom: 12px;"><div style="display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 4px; color: #ddd;"><span>${statNames[key]}</span><span>${Math.floor(damageStats[key]).toLocaleString()}</span></div><div style="width: 100%; height: 12px; background: #444; border-radius: 6px; overflow: hidden;"><div style="width: ${pct}%; height: 100%; background: ${statColors[key]}; box-shadow: 0 0 5px ${statColors[key]};"></div></div></div>`;
+                    }
+                });
+            }
+            chartHTML += `</div>`; document.getElementById("end-damage-chart").innerHTML = chartHTML;
             modals.end.style.display = "flex";
         }
 
@@ -325,18 +340,22 @@
             if (gameState !== "PLAYING") return;
             if (dangerLevel >= 20 && !bossActive && !bossDefeated) {
                 bossActive = true;
-                zombies.push({ x: WORLD.width / 2, y: -100, radius: 60, speed: 0.8, color: "#ff8800", hp: 12000 + (level * 200), isElite: false, isBoss: true });
-                return; 
+                // 新增異常狀態參數
+                zombies.push({ x: WORLD.width / 2, y: -100, radius: 60, speed: 0.8, color: "#ff8800", hp: 12000 + (level * 200), isElite: false, isBoss: true, burnTimer: 0, burnTick: 0 }); return; 
             }
             if (zombies.length > (bossActive ? 100 : 300)) return;
             let spawnCount = bossActive ? 1 : Math.floor(Math.random() * 3) + 2 + Math.floor(dangerLevel * 1.0);
             for(let i=0; i<spawnCount; i++){
                 let angle = Math.random() * Math.PI * 2; let dist = 500 + Math.random() * 200;
-                let zx = Math.max(20, Math.min(WORLD.width - 20, player.x + Math.cos(angle) * dist));
-                let zy = Math.max(20, Math.min(WORLD.height - 20, player.y + Math.sin(angle) * dist));
+                let zx = Math.max(20, Math.min(WORLD.width - 20, player.x + Math.cos(angle) * dist)); let zy = Math.max(20, Math.min(WORLD.height - 20, player.y + Math.sin(angle) * dist));
                 let isElite = Math.random() < Math.min(0.04, dangerLevel * 0.003);
-                if (isElite && !bossActive) zombies.push({ x: zx, y: zy, radius: 25, speed: 0.5 + Math.random() * 0.3, color: "#cc0000", hp: 50 + dangerLevel * 15, isElite: true, isBoss: false });
-                else zombies.push({ x: zx, y: zy, radius: 14, speed: 0.6 + Math.random() * 0.6 + (dangerLevel * 0.05), color: "#22cc22", hp: 4 + Math.floor(dangerLevel * 2.5), isElite: false, isBoss: false });
+                
+                let baseHp = isElite ? 50 + dangerLevel * 15 : 4 + Math.floor(dangerLevel * 2.5);
+                let baseSpeed = isElite ? 0.5 + Math.random() * 0.3 : 0.6 + Math.random() * 0.6 + (dangerLevel * 0.05);
+                let baseColor = isElite ? "#cc0000" : "#22cc22";
+                let radius = isElite ? 25 : 14;
+
+                zombies.push({ x: zx, y: zy, radius: radius, speed: baseSpeed, color: baseColor, hp: baseHp, isElite: isElite, isBoss: false, burnTimer: 0, burnTick: 0 });
             }
         }, 800);
 
@@ -352,35 +371,98 @@
             floatingTexts.push({ x: x, y: y, text: `-${Math.floor(damage)}`, life: 30, color: isCrit ? "#ff3333" : "#ffffff", size: isCrit ? 22 : 16 });
         }
 
-        function getGridKey(x, y) {
-            return `${Math.floor(x / CELL_SIZE)},${Math.floor(y / CELL_SIZE)}`;
-        }
+        function getGridKey(x, y) { return `${Math.floor(x / CELL_SIZE)},${Math.floor(y / CELL_SIZE)}`; }
 
         function update(dt) {
             if (gameState !== "PLAYING") return; 
-            let timeScale = dt * 60;
-
-            // Dash 狀態更新與 UI 刷新
-            let currentSpeed = player.speed * timeScale;
+            let timeScale = dt * 60; let currentSpeed = player.speed * timeScale;
             
+            // --- 技能發動邏輯：燃燒瓶 ---
+            if (player.molotovLevel > 0) {
+                molotovCooldown -= dt;
+                if (molotovCooldown <= 0) {
+                    molotovCooldown = Math.max(1, 4 - player.molotovLevel * 0.5);
+                    let throwCount = 1;
+                    let targets = zombies.sort(() => 0.5 - Math.random()).slice(0, throwCount);
+                    targets.forEach(tz => { thrownWeapons.push({ x: player.x, y: player.y, tx: tz.x, ty: tz.y, speed: 600 * dt, type: 'molotov' }); });
+                }
+            }
+
+            // --- 技能發動邏輯：閃電鏈 ---
+            if (player.lightningLevel > 0) {
+                lightningCooldown -= dt;
+                if (lightningCooldown <= 0) {
+                    lightningCooldown = Math.max(1.0, 3.5 - player.lightningLevel * 0.4);
+                    let bounces = 2 + player.lightningLevel;
+                    let searchRadius = 400;
+                    let dmg = player.damage * 2 * 1.2;
+                    
+                    let currentPos = { x: player.x, y: player.y }; let hitSet = new Set(); let points = [{x: player.x, y: player.y}];
+                    
+                    for(let i=0; i<bounces; i++) {
+                        let nearest = null; let minDist = searchRadius;
+                        for (let z of zombies) {
+                            if (!hitSet.has(z)) {
+                                let d = Math.hypot(z.x - currentPos.x, z.y - currentPos.y);
+                                if (d < minDist) { minDist = d; nearest = z; }
+                            }
+                        }
+                        if (nearest) {
+                            hitSet.add(nearest); nearest.hp -= dmg; spawnDamageText(nearest.x, nearest.y, dmg); damageStats.lightning += dmg;
+                            points.push({x: nearest.x, y: nearest.y}); currentPos = nearest;
+                        } else break;
+                    }
+                    if (points.length > 1) { lightningEffects.push({ points: points, life: 0.3 }); }
+                }
+            }
+
+            // --- 更新飛行道具 (燃燒瓶) ---
+            for (let i = thrownWeapons.length - 1; i >= 0; i--) {
+                let tw = thrownWeapons[i];
+                let dist = Math.hypot(tw.tx - tw.x, tw.ty - tw.y);
+                if (dist < tw.speed) {
+                    // 到達目標，產生火圈
+                    let radius = 50 + player.molotovLevel * 10;
+                    let duration = 4.0;
+                    firePools.push({ x: tw.tx, y: tw.ty, radius: radius, life: duration, maxLife: duration, tick: 0 });
+                    thrownWeapons.splice(i, 1);
+                } else {
+                    tw.x += ((tw.tx - tw.x) / dist) * tw.speed;
+                    tw.y += ((tw.ty - tw.y) / dist) * tw.speed;
+                }
+            }
+
+            // --- 更新地面火圈 ---
+            for (let i = firePools.length - 1; i >= 0; i--) {
+                let fp = firePools[i]; fp.life -= dt; fp.tick -= dt;
+                if (fp.tick <= 0) {
+                    fp.tick = 0.5; // 每半秒判定一次點燃
+                    zombies.forEach(z => {
+                        if (Math.hypot(z.x - fp.x, z.y - fp.y) < fp.radius + z.radius) {
+                            z.burnTimer = 3.0; // 賦予燃燒狀態
+                            if (z.burnTick <= 0) z.burnTick = 0; // 立即觸發第一次傷害
+                        }
+                    });
+                }
+                if (fp.life <= 0) firePools.splice(i, 1);
+            }
+
+            // --- 更新閃電視覺特效 ---
+            for (let i = lightningEffects.length - 1; i >= 0; i--) {
+                lightningEffects[i].life -= dt;
+                if (lightningEffects[i].life <= 0) lightningEffects.splice(i, 1);
+            }
+
             if (player.dashCooldown > 0) {
-                player.dashCooldown -= dt;
-                let progress = Math.max(0, 1 - (player.dashCooldown / player.dashCooldownMax));
-                dashBar.style.width = `${progress * 100}%`;
-                dashBar.style.background = progress >= 1 ? "#00ffcc" : "#555";
+                player.dashCooldown -= dt; let progress = Math.max(0, 1 - (player.dashCooldown / player.dashCooldownMax));
+                dashBar.style.width = `${progress * 100}%`; dashBar.style.background = progress >= 1 ? "#00ffcc" : "#555";
                 dashText.innerText = progress >= 1 ? "衝刺就緒 [Shift]" : `冷卻中 (${player.dashCooldown.toFixed(1)}s)`;
             }
 
             if (player.isDashing) {
-                player.dashTimer -= dt;
-                currentSpeed *= player.dashSpeedMult; 
-                
+                player.dashTimer -= dt; currentSpeed *= player.dashSpeedMult; 
                 trails.push({ x: player.x, y: player.y, life: 10, maxLife: 10, radius: player.radius });
-
-                if (player.dashTimer <= 0) {
-                    player.isDashing = false;
-                    player.isInvincible = false;
-                }
+                if (player.dashTimer <= 0) { player.isDashing = false; player.isInvincible = false; }
             }
 
             if (player.maxShield > 0 && player.shield < player.maxShield) {
@@ -388,7 +470,6 @@
                 if (Math.random() < 0.05 * timeScale) updateUI(); 
             }
 
-            // 套用 currentSpeed (包含衝刺加成)
             if ((keys["ArrowUp"] || keys["KeyW"]) && player.y > player.radius) player.y -= currentSpeed;
             if ((keys["ArrowDown"] || keys["KeyS"]) && player.y < WORLD.height - player.radius) player.y += currentSpeed;
             if ((keys["ArrowLeft"] || keys["KeyA"]) && player.x > player.radius) player.x -= currentSpeed;
@@ -399,11 +480,7 @@
             camera.y = Math.max(0, Math.min(WORLD.height - canvas.height, player.y - canvas.height / 2));
             player.orbitalAngle += 0.06 * timeScale;
 
-            // 殘影生命週期更新
-            for (let i = trails.length - 1; i >= 0; i--) {
-                trails[i].life -= 1 * timeScale;
-                if (trails[i].life <= 0) trails.splice(i, 1);
-            }
+            for (let i = trails.length - 1; i >= 0; i--) { trails[i].life -= 1 * timeScale; if (trails[i].life <= 0) trails.splice(i, 1); }
 
             for (let i = drops.length - 1; i >= 0; i--) {
                 let d = drops[i]; let dist = Math.hypot(player.x - d.x, player.y - d.y);
@@ -446,46 +523,31 @@
                 if (ex.life <= 0) explosions.splice(i, 1);
             }
 
-            floatingTexts.forEach(ft => { ft.y -= 1 * timeScale; ft.life -= 1 * timeScale; }); 
-            floatingTexts = floatingTexts.filter(ft => ft.life > 0);
+            floatingTexts.forEach(ft => { ft.y -= 1 * timeScale; ft.life -= 1 * timeScale; }); floatingTexts = floatingTexts.filter(ft => ft.life > 0);
 
             let spatialGrid = new Map();
             for (let z of zombies) {
                 let key = getGridKey(z.x, z.y);
-                if (!spatialGrid.has(key)) {
-                    spatialGrid.set(key, []);
-                }
+                if (!spatialGrid.has(key)) spatialGrid.set(key, []);
                 spatialGrid.get(key).push(z);
             }
 
             for (let j = bullets.length - 1; j >= 0; j--) {
-                let b = bullets[j];
-                let bxCell = Math.floor(b.x / CELL_SIZE);
-                let byCell = Math.floor(b.y / CELL_SIZE);
-                let bulletDestroyed = false;
-
+                let b = bullets[j]; let bxCell = Math.floor(b.x / CELL_SIZE); let byCell = Math.floor(b.y / CELL_SIZE); let bulletDestroyed = false;
                 for (let dx = -1; dx <= 1 && !bulletDestroyed; dx++) {
                     for (let dy = -1; dy <= 1 && !bulletDestroyed; dy++) {
-                        let neighborKey = `${bxCell + dx},${byCell + dy}`;
-                        let zombiesInCell = spatialGrid.get(neighborKey);
-
+                        let neighborKey = `${bxCell + dx},${byCell + dy}`; let zombiesInCell = spatialGrid.get(neighborKey);
                         if (zombiesInCell) {
                             for (let z of zombiesInCell) {
                                 if (z.hp <= 0) continue; 
-
                                 if (!b.hitZombies.has(z) && Math.hypot(b.x - z.x, b.y - z.y) < z.radius + b.radius) {
                                     z.hp -= b.damage; spawnDamageText(z.x, z.y, b.damage); b.hitZombies.add(z);
                                     
-                                    if (player.isEvolvedShot && !b.isUlt) {
-                                        explosions.push({ x: z.x, y: z.y, radius: 10, life: 10, damage: player.damage * 2, hitZombies: new Set() });
-                                    }
-                                    
+                                    if (b.isUlt) damageStats.ult += b.damage; else damageStats.shoot += b.damage;
+
+                                    if (player.isEvolvedShot && !b.isUlt) { explosions.push({ x: z.x, y: z.y, radius: 10, life: 10, damage: player.damage * 2, hitZombies: new Set() }); }
                                     b.pierce--; 
-                                    if (b.pierce <= 0) {
-                                        bullets.splice(j, 1);
-                                        bulletDestroyed = true;
-                                        break;
-                                    }
+                                    if (b.pierce <= 0) { bullets.splice(j, 1); bulletDestroyed = true; break; }
                                 }
                             }
                         }
@@ -494,48 +556,46 @@
             }
 
             for (let i = zombies.length - 1; i >= 0; i--) {
-                let z = zombies[i];
-                let distToPlayer = Math.hypot(player.x - z.x, player.y - z.y);
+                let z = zombies[i]; let distToPlayer = Math.hypot(player.x - z.x, player.y - z.y);
                 
-                if (distToPlayer > 0) { z.x += ((player.x - z.x) / distToPlayer) * z.speed * timeScale; z.y += ((player.y - z.y) / distToPlayer) * z.speed * timeScale; }
-                resolveObstacles(z);
-
-                for (let ex of explosions) {
-                    if (!ex.hitZombies.has(z) && Math.hypot(ex.x - z.x, ex.y - z.y) < ex.radius + z.radius) {
-                        z.hp -= ex.damage; spawnDamageText(z.x, z.y, ex.damage); ex.hitZombies.add(z);
+                // --- 結算燃燒傷害 ---
+                if (z.burnTimer > 0) {
+                    z.burnTimer -= dt; z.burnTick -= dt;
+                    if (z.burnTick <= 0) {
+                        let burnDmg = player.damage * 0.5;
+                        z.hp -= burnDmg; spawnDamageText(z.x, z.y, burnDmg); damageStats.molotov += burnDmg;
+                        z.burnTick = 0.5; // 每半秒跳一次傷害
                     }
                 }
 
+                // --- 物理移動與追擊 ---
+                let activeSpeed = z.speed;
+                if (distToPlayer > 0) {
+                    z.x += ((player.x - z.x) / distToPlayer) * activeSpeed * timeScale; 
+                    z.y += ((player.y - z.y) / distToPlayer) * activeSpeed * timeScale;
+                }
+                resolveObstacles(z);
+
+                for (let ex of explosions) {
+                    if (!ex.hitZombies.has(z) && Math.hypot(ex.x - z.x, ex.y - z.y) < ex.radius + z.radius) { z.hp -= ex.damage; spawnDamageText(z.x, z.y, ex.damage); ex.hitZombies.add(z); damageStats.explosion += ex.damage; }
+                }
+
                 if (player.auraLevel > 0 && distToPlayer < 80 + player.auraLevel * 30 + z.radius) {
-                    let auraDmg = player.auraLevel * 0.4 * timeScale;
-                    z.hp -= auraDmg; 
-                    if(Math.random() < 0.05 * timeScale) spawnDamageText(z.x, z.y, player.auraLevel * 0.4); 
+                    let auraDmg = player.auraLevel * 0.4 * timeScale; z.hp -= auraDmg; if(Math.random() < 0.05 * timeScale) spawnDamageText(z.x, z.y, player.auraLevel * 0.4); damageStats.aura += auraDmg;
                 }
 
                 if (player.orbitals > 0) {
                     for(let o = 0; o < player.orbitals; o++) {
-                        let ox = player.x + Math.cos(player.orbitalAngle + (o/player.orbitals)*Math.PI*2) * 70; 
-                        let oy = player.y + Math.sin(player.orbitalAngle + (o/player.orbitals)*Math.PI*2) * 70;
-                        if (Math.hypot(ox - z.x, oy - z.y) < 15 + z.radius) {
-                            let dmg = (1.2 + player.damage * 0.2) * timeScale; 
-                            z.hp -= dmg; 
-                            if(Math.random() < 0.1 * timeScale) spawnDamageText(z.x, z.y, dmg / timeScale);
-                        }
+                        let ox = player.x + Math.cos(player.orbitalAngle + (o/player.orbitals)*Math.PI*2) * 70; let oy = player.y + Math.sin(player.orbitalAngle + (o/player.orbitals)*Math.PI*2) * 70;
+                        if (Math.hypot(ox - z.x, oy - z.y) < 15 + z.radius) { let dmg = (1.2 + player.damage * 0.2) * timeScale; z.hp -= dmg; if(Math.random() < 0.1 * timeScale) spawnDamageText(z.x, z.y, dmg / timeScale); damageStats.orbital += dmg; }
                     }
                 }
 
                 if (distToPlayer < player.radius + z.radius) {
-                    // 確保非無敵狀態才扣血
                     if (!player.isInvincible) {
                         let dmg = (z.isBoss ? 5.0 : z.isElite ? 1.5 : 0.5) * timeScale;
-                        if (player.shield > 0) {
-                            player.shield -= dmg;
-                            if (player.shield < 0) { player.hp += player.shield; player.shield = 0; } 
-                        } else {
-                            player.hp -= dmg;
-                        }
-                        updateUI();
-                        if (player.hp <= 0) { endGame(false); return; }
+                        if (player.shield > 0) { player.shield -= dmg; if (player.shield < 0) { player.hp += player.shield; player.shield = 0; } } else { player.hp -= dmg; }
+                        updateUI(); if (player.hp <= 0) { endGame(false); return; }
                     }
                 }
 
@@ -543,7 +603,6 @@
                     if (z.isBoss) { bossDefeated = true; endGame(true); return; } 
                     else if (z.isElite) { drops.push({ x: z.x, y: z.y, radius: 10, type: "elite_xp", xpValue: 100 }); if(Math.random() < 0.5) drops.push({ x: z.x + 10, y: z.y + 10, radius: 8, type: "coin" }); } 
                     else { drops.push({ x: z.x, y: z.y, radius: 5, color: "#00ffff", type: "xp", xpValue: 10 }); if(Math.random() < 0.05) drops.push({ x: z.x + 5, y: z.y + 5, radius: 8, type: "coin" }); }
-                    
                     zombies.splice(i, 1); score += 1;
                     if (ultEnergy < MAX_ULT_ENERGY) { ultEnergy = Math.min(MAX_ULT_ENERGY, ultEnergy + (z.isBoss ? 100 : z.isElite ? 10 : 2)); updateUltUI(); }
                     updateUI();
@@ -551,110 +610,101 @@
             }
         }
 
+        function drawOffScreenIndicators() {
+            const padding = 25; const cx = canvas.width / 2; const cy = canvas.height / 2; let targets = [];
+            drops.forEach(d => { if (d.type === "medkit") targets.push({ x: d.x, y: d.y, type: "medkit" }); });
+            zombies.forEach(z => { if (z.isBoss) targets.push({ x: z.x, y: z.y, type: "boss" }); });
+
+            targets.forEach(target => {
+                let screenX = target.x - camera.x; let screenY = target.y - camera.y;
+                if (screenX < 0 || screenX > canvas.width || screenY < 0 || screenY > canvas.height) {
+                    let dx = screenX - cx; let dy = screenY - cy; let angle = Math.atan2(dy, dx);
+                    let scaleX = (cx - padding) / Math.abs(dx); let scaleY = (cy - padding) / Math.abs(dy); let scale = Math.min(scaleX, scaleY);
+                    let indX = cx + dx * scale; let indY = cy + dy * scale;
+                    ctx.save(); ctx.translate(indX, indY); ctx.rotate(angle);
+                    ctx.beginPath(); ctx.moveTo(12, 0); ctx.lineTo(-10, 10); ctx.lineTo(-10, -10); ctx.closePath();
+                    if (target.type === "medkit") { ctx.fillStyle = "#ffffff"; ctx.fill(); ctx.strokeStyle = "#00ff00"; ctx.lineWidth = 3; ctx.stroke(); } 
+                    else if (target.type === "boss") { ctx.shadowBlur = 10; ctx.shadowColor = "#ff0000"; ctx.fillStyle = "#ff0000"; ctx.fill(); ctx.strokeStyle = "#ffaa00"; ctx.lineWidth = 3; ctx.stroke(); }
+                    ctx.restore();
+                }
+            });
+        }
+
         function draw() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
             if (gameState !== "MENU") {
-                ctx.strokeStyle = "#444"; ctx.lineWidth = 10; ctx.strokeRect(0 - camera.x, 0 - camera.y, WORLD.width, WORLD.height);
-                ctx.strokeStyle = "#222"; ctx.lineWidth = 1;
+                ctx.strokeStyle = "#444"; ctx.lineWidth = 10; ctx.strokeRect(0 - camera.x, 0 - camera.y, WORLD.width, WORLD.height); ctx.strokeStyle = "#222"; ctx.lineWidth = 1;
                 for(let x = 0; x < WORLD.width; x += 100) { ctx.beginPath(); ctx.moveTo(x - camera.x, 0 - camera.y); ctx.lineTo(x - camera.x, WORLD.height - camera.y); ctx.stroke(); }
                 for(let y = 0; y < WORLD.height; y += 100) { ctx.beginPath(); ctx.moveTo(0 - camera.x, y - camera.y); ctx.lineTo(WORLD.width - camera.x, y - camera.y); ctx.stroke(); }
             }
 
-            obstacles.forEach(obs => {
-                ctx.beginPath(); ctx.arc(obs.x - camera.x, obs.y - camera.y, obs.radius, 0, Math.PI * 2);
-                ctx.fillStyle = obs.color; ctx.fill(); ctx.strokeStyle = "#333"; ctx.lineWidth = 3; ctx.stroke(); ctx.closePath();
+            // 繪製地面火圈
+            firePools.forEach(fp => {
+                ctx.beginPath(); ctx.arc(fp.x - camera.x, fp.y - camera.y, fp.radius, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(255, 120, 0, ${0.1 + (fp.life/fp.maxLife)*0.3})`;
+                ctx.fill(); ctx.closePath();
             });
 
-            explosions.forEach(ex => {
-                ctx.beginPath(); ctx.arc(ex.x - camera.x, ex.y - camera.y, ex.radius, 0, Math.PI * 2);
-                ctx.fillStyle = `rgba(255, 80, 0, ${ex.life / 10})`; ctx.fill(); ctx.closePath();
-            });
-
+            obstacles.forEach(obs => { ctx.beginPath(); ctx.arc(obs.x - camera.x, obs.y - camera.y, obs.radius, 0, Math.PI * 2); ctx.fillStyle = obs.color; ctx.fill(); ctx.strokeStyle = "#333"; ctx.lineWidth = 3; ctx.stroke(); ctx.closePath(); });
+            explosions.forEach(ex => { ctx.beginPath(); ctx.arc(ex.x - camera.x, ex.y - camera.y, ex.radius, 0, Math.PI * 2); ctx.fillStyle = `rgba(255, 80, 0, ${ex.life / 10})`; ctx.fill(); ctx.closePath(); });
+            
             drops.forEach(d => {
                 if (d.type === "xp") { ctx.fillStyle = d.color; ctx.fillRect(d.x - camera.x - d.radius, d.y - camera.y - d.radius, d.radius*2, d.radius*2); } 
                 else if (d.type === "elite_xp") { ctx.fillStyle = "#ffd700"; ctx.beginPath(); ctx.arc(d.x - camera.x, d.y - camera.y, d.radius, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 2; ctx.stroke(); } 
                 else if (d.type === "coin") { ctx.fillStyle = "gold"; ctx.beginPath(); ctx.arc(d.x - camera.x, d.y - camera.y, d.radius, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = "#daaa00"; ctx.lineWidth = 2; ctx.stroke(); } 
-                else if (d.type === "medkit") {
-                    let dx = d.x - camera.x, dy = d.y - camera.y; ctx.fillStyle = "#fff"; ctx.fillRect(dx - d.radius, dy - d.radius, d.radius*2, d.radius*2);
-                    ctx.fillStyle = "#f00"; ctx.fillRect(dx - 2, dy - d.radius + 4, 4, d.radius*2 - 8); ctx.fillRect(dx - d.radius + 4, dy - 2, d.radius*2 - 8, 4);
-                }
+                else if (d.type === "medkit") { let dx = d.x - camera.x, dy = d.y - camera.y; ctx.fillStyle = "#fff"; ctx.fillRect(dx - d.radius, dy - d.radius, d.radius*2, d.radius*2); ctx.fillStyle = "#f00"; ctx.fillRect(dx - 2, dy - d.radius + 4, 4, d.radius*2 - 8); ctx.fillRect(dx - d.radius + 4, dy - 2, d.radius*2 - 8, 4); }
+            });
+
+            // 繪製飛行中的燃燒瓶
+            thrownWeapons.forEach(tw => {
+                ctx.beginPath(); ctx.arc(tw.x - camera.x, tw.y - camera.y, 6, 0, Math.PI * 2);
+                ctx.fillStyle = "#ff5500"; ctx.fill(); ctx.strokeStyle = "#fff"; ctx.lineWidth=1; ctx.stroke(); ctx.closePath();
             });
 
             bullets.forEach(b => { ctx.beginPath(); ctx.arc(b.x - camera.x, b.y - camera.y, b.radius, 0, Math.PI * 2); ctx.fillStyle = b.color; ctx.fill(); ctx.closePath(); });
-
-            zombies.forEach(z => {
-                ctx.beginPath(); ctx.arc(z.x - camera.x, z.y - camera.y, z.radius, 0, Math.PI * 2); ctx.fillStyle = z.color; ctx.fill(); ctx.closePath();
-                if (z.isBoss) { ctx.strokeStyle = "#f00"; ctx.lineWidth = 4; ctx.stroke(); }
+            
+            zombies.forEach(z => { 
+                ctx.beginPath(); ctx.arc(z.x - camera.x, z.y - camera.y, z.radius, 0, Math.PI * 2); 
+                // 根據燃燒狀態改變顏色
+                ctx.fillStyle = z.burnTimer > 0 ? "#ffaa00" : z.color; 
+                ctx.fill(); ctx.closePath(); 
+                if (z.isBoss) { ctx.strokeStyle = "#f00"; ctx.lineWidth = 4; ctx.stroke(); } 
             });
 
-            // 繪製衝刺殘影 (放在玩家實體下方)
-            if (gameState === "PLAYING") {
-                trails.forEach(t => {
-                    ctx.beginPath();
-                    ctx.arc(t.x - camera.x, t.y - camera.y, t.radius, 0, Math.PI * 2);
-                    ctx.fillStyle = `rgba(0, 255, 204, ${t.life / t.maxLife * 0.5})`; 
-                    ctx.fill();
-                    ctx.closePath();
-                });
-            }
+            // 繪製閃電特效
+            lightningEffects.forEach(le => {
+                ctx.beginPath();
+                ctx.moveTo(le.points[0].x - camera.x, le.points[0].y - camera.y);
+                for (let i = 1; i < le.points.length; i++) {
+                    ctx.lineTo(le.points[i].x - camera.x, le.points[i].y - camera.y);
+                }
+                ctx.strokeStyle = `rgba(0, 255, 255, ${le.life*3})`;
+                ctx.lineWidth = 3;
+                ctx.lineJoin = "miter";
+                ctx.stroke();
+            });
 
-            if (player && (gameState === "PLAYING" || gameState === "VICTORY" || gameState === "MENU")) {
+            if (gameState === "PLAYING") { trails.forEach(t => { ctx.beginPath(); ctx.arc(t.x - camera.x, t.y - camera.y, t.radius, 0, Math.PI * 2); ctx.fillStyle = `rgba(0, 255, 204, ${t.life / t.maxLife * 0.5})`; ctx.fill(); ctx.closePath(); }); }
+
+            if (player && (gameState === "PLAYING" || gameState === "VICTORY" || gameState === "MENU" || gameState === "PAUSED")) {
                 let px = player.x - camera.x; let py = player.y - camera.y;
-                
-                if (player.shield > 0 && gameState !== "MENU") {
-                    ctx.beginPath(); ctx.arc(px, py, player.radius + 6, 0, Math.PI * 2);
-                    ctx.strokeStyle = `rgba(0, 200, 255, ${0.4 + (player.shield/player.maxShield)*0.6})`; 
-                    ctx.lineWidth = 3; ctx.stroke(); ctx.closePath();
-                }
-
-                if (targetZombie && gameState === "PLAYING") {
-                    ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(targetZombie.x - camera.x, targetZombie.y - camera.y);
-                    ctx.strokeStyle = "rgba(255, 50, 50, 0.5)"; ctx.lineWidth = 2; ctx.stroke(); ctx.closePath();
-                }
-
-                // 無敵發光效果
-                if (player.isInvincible) {
-                    ctx.shadowBlur = 15;
-                    ctx.shadowColor = "#00ffcc";
-                }
-
-                ctx.beginPath(); ctx.arc(px, py, player.radius, 0, Math.PI * 2); ctx.fillStyle = player.color; ctx.fill(); ctx.closePath();
-                
-                ctx.shadowBlur = 0; // 重置發光效果
-                
-                if (player.orbitals > 0 && gameState !== "MENU") {
-                    for(let o = 0; o < player.orbitals; o++) {
-                        let angle = player.orbitalAngle + (o / player.orbitals) * Math.PI * 2;
-                        ctx.beginPath(); ctx.arc(px + Math.cos(angle)*70, py + Math.sin(angle)*70, 8, 0, Math.PI * 2); ctx.fillStyle = "#0ff"; ctx.fill(); ctx.closePath();
-                    }
-                }
+                if (player.shield > 0 && gameState !== "MENU") { ctx.beginPath(); ctx.arc(px, py, player.radius + 6, 0, Math.PI * 2); ctx.strokeStyle = `rgba(0, 200, 255, ${0.4 + (player.shield/player.maxShield)*0.6})`; ctx.lineWidth = 3; ctx.stroke(); ctx.closePath(); }
+                if (targetZombie && gameState === "PLAYING") { ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(targetZombie.x - camera.x, targetZombie.y - camera.y); ctx.strokeStyle = "rgba(255, 50, 50, 0.5)"; ctx.lineWidth = 2; ctx.stroke(); ctx.closePath(); }
+                if (player.isInvincible) { ctx.shadowBlur = 15; ctx.shadowColor = "#00ffcc"; }
+                ctx.beginPath(); ctx.arc(px, py, player.radius, 0, Math.PI * 2); ctx.fillStyle = player.color; ctx.fill(); ctx.closePath(); ctx.shadowBlur = 0; 
+                if (player.orbitals > 0 && gameState !== "MENU") { for(let o = 0; o < player.orbitals; o++) { let angle = player.orbitalAngle + (o / player.orbitals) * Math.PI * 2; ctx.beginPath(); ctx.arc(px + Math.cos(angle)*70, py + Math.sin(angle)*70, 8, 0, Math.PI * 2); ctx.fillStyle = "#0ff"; ctx.fill(); ctx.closePath(); } }
             }
 
-            if (gameState === "PLAYING") {
-                floatingTexts.forEach(ft => {
-                    ctx.fillStyle = ft.color === "#ff3333" ? `rgba(255, 51, 51, ${ft.life/30})` : `rgba(255, 255, 255, ${ft.life/30})`;
-                    ctx.font = `bold ${ft.size}px sans-serif`; ctx.fillText(ft.text, ft.x - camera.x - 10, ft.y - camera.y - 15);
-                });
+            if (gameState === "PLAYING" || gameState === "PAUSED") { drawOffScreenIndicators(); }
+
+            if (gameState === "PLAYING" || gameState === "PAUSED") {
+                floatingTexts.forEach(ft => { ctx.fillStyle = ft.color === "#ff3333" ? `rgba(255, 51, 51, ${ft.life/30})` : `rgba(255, 255, 255, ${ft.life/30})`; ctx.font = `bold ${ft.size}px sans-serif`; ctx.fillText(ft.text, ft.x - camera.x - 10, ft.y - camera.y - 15); });
             }
         }
 
-        function gameLoop(timestamp) { 
-            let dt = (timestamp - lastTime) / 1000; 
-            lastTime = timestamp;
-            if (dt > 0.1) dt = 0.1; 
-
-            update(dt); 
-            draw(); 
-            requestAnimationFrame(gameLoop); 
-        }
-
-        initGame(); 
-        
-        requestAnimationFrame((timestamp) => {
-            lastTime = timestamp;
-            gameLoop(timestamp);
-        });
+        function gameLoop(timestamp) { let dt = (timestamp - lastTime) / 1000; lastTime = timestamp; if (dt > 0.1) dt = 0.1; update(dt); draw(); requestAnimationFrame(gameLoop); }
+        initGame(); requestAnimationFrame((timestamp) => { lastTime = timestamp; gameLoop(timestamp); });
     </script>
 </body>
 </html>
