@@ -1342,35 +1342,6 @@
         function gameLoop(timestamp) { let dt = (timestamp - lastTime) / 1000; lastTime = timestamp; if (dt > 0.1) dt = 0.1; update(dt); draw(); requestAnimationFrame(gameLoop); }
         initGame(); requestAnimationFrame((timestamp) => { lastTime = timestamp; gameLoop(timestamp); });
         
-        // --- 🛠️ 開發者控制台 ---
-        const devPanel = document.createElement("div");
-        devPanel.style.cssText = "position:absolute; top:10px; left:10px; background:rgba(0,20,0,0.85); border:2px solid #00ff00; padding:10px; border-radius:8px; z-index:100; text-align:left; color:#00ff00; font-family:sans-serif; box-shadow: 0 0 10px #00ff00;";
-        devPanel.innerHTML = `
-            <div style="margin-bottom:8px; font-weight:bold; font-size:16px;">🛠️ 開發者控制台</div>
-            <div style="display:flex; gap:5px; margin-bottom:5px;">
-                <button style="background:#222; color:#fff; border:1px solid #00ff00; padding:5px 10px; cursor:pointer; border-radius:4px; transition:0.2s;" onmouseover="this.style.background='#00ff00'; this.style.color='#000';" onmouseout="this.style.background='#222'; this.style.color='#fff';" onclick="cheatLevel(1)">🔼 升 1 級</button>
-                <button style="background:#222; color:#fff; border:1px solid #00ff00; padding:5px 10px; cursor:pointer; border-radius:4px; transition:0.2s;" onmouseover="this.style.background='#00ff00'; this.style.color='#000';" onmouseout="this.style.background='#222'; this.style.color='#fff';" onclick="cheatLevel(10)">⏫ 升 10 級</button>
-            </div>
-            <div style="display:flex; gap:5px;">
-                <button style="background:#222; color:#fff; border:1px solid #00ffff; padding:5px 10px; cursor:pointer; border-radius:4px; transition:0.2s;" onmouseover="this.style.background='#00ffff'; this.style.color='#000';" onmouseout="this.style.background='#222'; this.style.color='#fff';" onclick="cheatTime(60)">⏩ 時間 +1 分鐘</button>
-                <button style="background:#222; color:#fff; border:1px solid #ff0000; padding:5px 10px; cursor:pointer; border-radius:4px; transition:0.2s;" onmouseover="this.style.background='#ff0000'; this.style.color='#fff';" onmouseout="this.style.background='#222'; this.style.color='#fff';" onclick="cheatTime(300)">👑 BOSS 降臨</button>
-            </div>
-        `;
-        document.getElementById("game-wrapper").appendChild(devPanel);
-
-        window.cheatLevel = function(levels) {
-            if (gameState !== "PLAYING" && gameState !== "LEVEL_UP" && gameState !== "CHEST_ROULETTE") return alert("請先進入戰鬥畫面！");
-            let xpToAdd = 0; let simulatedXpNeeded = xpNeeded;
-            for(let i = 0; i < levels; i++) {
-                let xpForThisLevel = (i === 0) ? (simulatedXpNeeded - currentXp) : simulatedXpNeeded;
-                xpToAdd += xpForThisLevel; simulatedXpNeeded = Math.floor(simulatedXpNeeded * 1.2);
-            }
-            gainXp(xpToAdd);
-        };
-        window.cheatTime = function(seconds) {
-            if (gameState !== "PLAYING") return alert("請先進入戰鬥畫面！");
-            gameSeconds += seconds; dangerLevel = Math.floor(gameSeconds / 15); updateUI();
-        };
     </script>
 </body>
 </html>
